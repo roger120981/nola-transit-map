@@ -235,7 +235,11 @@ func (v *Scraper) fetch() (*BustimeData) {
 	}
 
 	result := &BustimeResponse{}
-	json.Unmarshal(body, result)
+	if err := json.Unmarshal(body, result); err != nil {
+		log.Printf("ERROR: JSON unmarshal failed: %v", err)
+		log.Printf("Response body (first 500 chars): %s", string(body)[:min(500, len(body))])
+		return &BustimeData{}
+	}
 
 	return &result.Data
 }
