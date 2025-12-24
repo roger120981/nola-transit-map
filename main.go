@@ -333,9 +333,8 @@ func (b *VehicleBroadcaster) broadcast() {
 	for vs := range b.incoming {
 		log.Println("Caching Vehicles")
 		b.vehicles = vs
-		log.Printf("%d listeners \n", len(b.receivers))
+		log.Printf("Broadcasting to %d listeners\n", len(b.receivers))
 		for r, _ := range b.receivers {
-			log.Println("Broadcasting Vehicles")
 			select {
 			case r <- vs:
 			default:
@@ -377,13 +376,18 @@ func (s *Server) Start() {
 	}
 }
 
+// Writes the vehicles to SSE connection
 func (s *Server) writeVehicles(w http.ResponseWriter, vehicles []Vehicle) error {
 	if len(vehicles) > 0 {
 		payload, err := json.Marshal(vehicles)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(w, "data: %s\n\n", payload)
+
+		// A write error means the client probably disconnected
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			return err
+		}
 	} else {
 		log.Println("No Vehicles to write")
 	}
@@ -397,16 +401,33 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 
 	vehicleChan := make(VehicleChannel)
 	s.broadcaster.Register(vehicleChan)
+
+	// Ensure cleanup when connection closes
+	defer func() {
+		s.broadcaster.Unregister(vehicleChan)
+		close(vehicleChan)
+		log.Println("SSE connection closed and cleaned up")
+	}()
+
 	log.Println("Sending cached vehicles")
 	s.writeVehicles(w, s.broadcaster.vehicles)
 
-	for vehicles := range vehicleChan {
-		err := s.writeVehicles(w, vehicles)
-		if err != nil {
-			break
+	for {
+		select {
+		case vehicles, ok := <-vehicleChan:
+			if !ok {
+				return
+			}
+			err := s.writeVehicles(w, vehicles)
+			// failure to write means we should probably close connection
+			if err != nil {
+				return
+			}
+		case <-r.Context().Done():
+			// client disconnected
+			return
 		}
 	}
-	log.Println("SSE connection closed")
 }
 
 func main() {
